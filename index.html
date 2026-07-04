@@ -988,14 +988,21 @@ async function initApp(){
   buildNav();
   activeMenu = u.role==='brand-leader'?'dashboard':'staff-dashboard';
 
-  // Show skeleton while loading
+  // Data biasanya SUDAH termuat oleh window.onload (sebelum login).
+  // Jangan pull ulang — langsung tampilkan. Auto-poll akan menyegarkan di latar belakang.
+  if(state.dataLoaded){
+    migrateBudgetToCurrentMonth();
+    navigate(activeMenu);
+    return;
+  }
+
+  // Fallback: data belum termuat (mis. login setelah koneksi sempat gagal)
   document.getElementById('page-content').innerHTML = `
     <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:12px;color:var(--gray-400)">
       <div style="width:40px;height:40px;border:3px solid var(--gray-100);border-top-color:var(--orange);border-radius:50%;animation:spin .8s linear infinite"></div>
       <p style="font-size:13px">Memuat data terbaru...</p>
     </div>`;
 
-  // Auto-load from Sheets if URL configured, else use local data
   if(state.sheetsUrl){
     await autoLoadFromSheets(state.sheetsUrl);
     migrateBudgetToCurrentMonth();
