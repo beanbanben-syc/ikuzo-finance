@@ -616,10 +616,16 @@ const genId = () => Math.random().toString(36).slice(2)+Date.now().toString(36);
 
 
 const INITIAL_USERS = [
-  {id:'u1',name:'Tiara Cahya',username:'tiara',password:'tiara161',role:'brand-leader',phone:'',joinDate:'2026-05-01',position:'Brand Leader'},
+  {id:'u1',name:'Tiara Cahya',username:'tiara',password:'tiara161',role:'brand-leader',phone:'',joinDate:'2026-06-26',position:'Brand Leader'},
+  {id:'u-sisil',name:'Arshila',username:'sisil',password:'sisil123',role:'brand-leader',phone:'',joinDate:'2026-06-26',position:'CFO'},
   {id:'u2',name:'Andi Pratama',username:'andi',password:'andi123',role:'staff',phone:'08234567890',joinDate:'2024-03-01',position:'Staff Kasir'},
   {id:'u3',name:'Budi Santoso',username:'budi',password:'budi123',role:'staff',phone:'08345678901',joinDate:'2024-04-10',position:'Staff Operasional'},
-  {id:'u4',name:'Rendy (SPV)',username:'rendy',password:'rendy123',role:'staff',phone:'',joinDate:'2026-07-03',position:'SPV'},
+  {id:'u-rendy',name:'Rendy (SPV)',username:'rendy',password:'rendy123',role:'staff',phone:'',joinDate:'2026-06-26',position:'SPV'},
+  {id:'u-alex',name:'Alex',username:'alex',password:'alex123',role:'staff',phone:'',joinDate:'2026-06-26',position:'Kasir/Mobile'},
+  {id:'u-rizky',name:'Rizky',username:'rizky',password:'rizky123',role:'staff',phone:'',joinDate:'2026-06-26',position:'Kasir/Mobile'},
+  {id:'u-adit',name:'Adit',username:'adit',password:'adit123',role:'staff',phone:'',joinDate:'2026-06-26',position:'Kasir/Mobile'},
+  {id:'u-fafa',name:'Fafa',username:'fafa',password:'fafa123',role:'staff',phone:'',joinDate:'2026-06-26',position:'Kitchen'},
+  {id:'u-amel',name:'Amelia',username:'amel',password:'amel123',role:'staff',phone:'',joinDate:'2026-06-26',position:'Head Kitchen'},
 ];
 // INITIAL_EXPENSES, INITIAL_INCOMES, INITIAL_BUDGETS dihapus.
 // Data hanya berasal dari Google Sheets (Single Source of Truth).
@@ -636,7 +642,7 @@ let state = {
   budgets: [],
   deletedIds: [],
   sheetsUrl: localStorage.getItem('ik_sheets_url') || DEFAULT_SHEETS_URL,
-  dataLoaded: false, // true hanya setelah pull dari Sheets sukses — mencegah push data kosong/default menimpa cloud
+  dataLoaded: false, // true hanya setelah pull dari Sheets sukses — mencegah push data kosong menimpa cloud
 };
 
 
@@ -659,11 +665,7 @@ let categoryFilter = null;
 function rp(n){ return new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',minimumFractionDigits:0}).format(n); }
 function fmtDate(s){ if(!s)return '-'; const d=new Date(s+'T00:00:00'); return d.toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'}); }
 function fmtDateShort(s){ if(!s)return '-'; const d=new Date(s+'T00:00:00'); return d.toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'}); }
-function currentMonth(){
-  const y=today.getFullYear();
-  const m=String(today.getMonth()+1).padStart(2,'0');
-  return `${y}-${m}`;
-}
+function currentMonth(){ return fmt(today).slice(0,7); }
 // ══════════════════════════════════════════════
 // SYNC ENGINE — localStorage + Google Sheets
 // ══════════════════════════════════════════════
@@ -698,8 +700,8 @@ function persist(){
   if(state.currentUser) localStorage.setItem('ik_session_uid', state.currentUser.id);
 
   // Push ke cloud (debounced 1.5 detik)
-  // PENTING: jangan push kalau data awal dari Sheets belum berhasil dimuat (dataLoaded=false),
-  // supaya state lokal yang kosong/default TIDAK menimpa data asli di cloud.
+  // GUARD: jangan push kalau data awal dari Sheets belum berhasil dimuat,
+  // supaya state kosong TIDAK menimpa data asli di cloud.
   if(state.sheetsUrl && state.dataLoaded){
     clearTimeout(_syncTimer);
     syncStatus('saving','Menyimpan...');
@@ -748,54 +750,25 @@ function simpleMerge(local, cloud){
 }
 
 // ══════════════════════════════════════════════
-// AUTO SYNC — pull+merge cloud dulu, baru push
-// Kenapa TIDAK push langsung tanpa pull: kalau push langsung, device A bisa
-// menimpa perubahan device B yang baru saja push duluan (race condition),
-// dan kalau state lokal kebetulan belum lengkap (misal pull awal gagal),
-// itu akan MENGHAPUS PERMANEN data di cloud. Tombstone (deletedIds) di
-// simpleMerge() sudah memastikan item yang dihapus tidak "hidup lagi",
-// jadi pull+merge di sini aman dan tidak akan membawa balik data terhapus.
+// AUTO SYNC — langsung push ke Sheets (TANPA pull dulu)
+// Fix utama: reset data tidak akan kembali dari cloud karena tidak ada merge
 // ══════════════════════════════════════════════
 async function autoSyncToSheets(){
   if(!state.sheetsUrl || _syncBusy) return;
-  // Jangan pernah push kalau data awal belum sukses dimuat dari cloud
   if(!state.dataLoaded){ syncStatus('error','Data cloud belum termuat — tidak disimpan.'); return; }
   _syncBusy = true;
   try{
-    const cloudData = await pullCloudData(state.sheetsUrl);
-    let toPush;
-    if(cloudData){
-      // Merge cloud terbaru dengan perubahan lokal sebelum push, supaya
-      // tidak menimpa perubahan device lain yang belum sempat kita tarik.
-      const merged = simpleMerge(state, cloudData);
-      state.expenses   = merged.expenses;
-      state.incomes    = merged.incomes;
-      state.budgets    = merged.budgets;
-      state.users      = merged.users;
-      state.deletedIds = merged.deletedIds;
-      if(state.currentUser){
-        const me=state.users.find(u=>u.id===state.currentUser.id);
-        if(me){ state.currentUser=me; localStorage.setItem('ik_session_uid',me.id); }
-      }
-      toPush = merged;
-    } else {
-      // Pull gagal (mis. Apps Script cold start) — tetap push state lokal
-      // apa adanya (state ini sudah tervalidasi dataLoaded=true sebelumnya,
-      // jadi bukan data kosong/default).
-      toPush = state;
-    }
-
     await fetch(state.sheetsUrl,{
       method:'POST',
       mode:'no-cors',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
       body: JSON.stringify({
         action:     'push_all',
-        users:      toPush.users,
-        expenses:   toPush.expenses,
-        incomes:    toPush.incomes,
-        budgets:    toPush.budgets,
-        deletedIds: toPush.deletedIds||[],
+        users:      state.users,
+        expenses:   state.expenses,
+        incomes:    state.incomes,
+        budgets:    state.budgets,
+        deletedIds: state.deletedIds||[],
       })
     });
     const now=new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
@@ -847,20 +820,19 @@ function pullCloudData(url){
   });
 }
 
-// Coba pull beberapa kali sebelum benar-benar menyerah — Apps Script cold
-// start / jaringan lambat sering bikin percobaan pertama gagal/timeout.
+// ══════════════════════════════════════════════
+// LOAD FROM SHEETS — full replace (dipakai saat login & initApp)
+// ══════════════════════════════════════════════
+// Coba pull beberapa kali — Apps Script cold start sering bikin percobaan pertama gagal
 async function pullCloudDataWithRetry(url, attempts=3){
   for(let i=0;i<attempts;i++){
     const data = await pullCloudData(url);
     if(data) return data;
-    if(i<attempts-1) await new Promise(r=>setTimeout(r,1000));
+    if(i<attempts-1) await new Promise(r=>setTimeout(r,1500));
   }
   return null;
 }
 
-// ══════════════════════════════════════════════
-// LOAD FROM SHEETS — full replace (dipakai saat login & initApp)
-// ══════════════════════════════════════════════
 async function loadFromSheets(url){
   if(!url) return false;
   syncStatus('loading','Memuat data...');
@@ -874,8 +846,6 @@ async function loadFromSheets(url){
   state.budgets  = cloudData.budgets;
   state.deletedIds = cloudData.deletedIds||[];
   state.dataLoaded = true; // aman untuk push mulai sekarang
-
-  // Bersihkan duplikat budget yang mungkin terbawa dari data lama
   deduplicateBudgets();
 
   // Perbarui currentUser dari data cloud terbaru (password, nama, dll)
@@ -909,12 +879,7 @@ async function pullFromSheets(){
 }
 
 function monthOptions(){ 
-  return Array.from({length:12},(_,i)=>{
-    const d=new Date(today.getFullYear(),today.getMonth()-i,1);
-    const y=d.getFullYear();
-    const m=String(d.getMonth()+1).padStart(2,'0');
-    return {value:`${y}-${m}`,label:`${MONTHS_ID[d.getMonth()]} ${y}`};
-  });
+  return Array.from({length:12},(_,i)=>{ const d=new Date(today.getFullYear(),today.getMonth()-i,1); return {value:d.toISOString().slice(0,7),label:`${MONTHS_ID[d.getMonth()]} ${d.getFullYear()}`}; });
 }
 function populateDateSelects(dayId,monthId,yearId,dateStr){
   const ds=document.getElementById(dayId),ms=document.getElementById(monthId),ys=document.getElementById(yearId);
@@ -997,7 +962,7 @@ function closeSidebar(){ document.getElementById('sidebar').classList.remove('op
 function migrateBudgetToCurrentMonth(){
   const thisMon=currentMonth();
   const hasThisMonth=state.budgets.some(b=>b.month===thisMon);
-  if(hasThisMonth){ deduplicateBudgets(); return; }
+  if(hasThisMonth) return;
 
   // Salin dari bulan terakhir yang ada
   const months=[...new Set(state.budgets.map(b=>b.month))].sort();
@@ -1007,21 +972,8 @@ function migrateBudgetToCurrentMonth(){
       state.budgets.push({id:genId(),category:b.category,month:thisMon,allocated:b.allocated});
     });
   }
-  deduplicateBudgets();
-}
-
-// Hapus entri budget duplikat (category+month sama).
-// Simpan yang updatedAt paling baru, atau yang terakhir di array.
-function deduplicateBudgets(){
-  const map={};
-  state.budgets.forEach(b=>{
-    const key=b.category+'_'+b.month;
-    const existing=map[key];
-    if(!existing||(b.updatedAt||0)>(existing.updatedAt||0)){
-      map[key]=b;
-    }
-  });
-  state.budgets=Object.values(map);
+  // Jika tidak ada data sama sekali → biarkan kosong (user mengisi sendiri)
+  // Jangan pakai INITIAL_BUDGETS hardcoded supaya tidak muncul Rp7.800.000 secara magis
 }
 
 
@@ -1099,7 +1051,6 @@ function renderBLDashboard(){
   // itu menyebabkan data default Rp7.800.000 masuk saat localStorage kosong
   // Migrasi hanya boleh dipanggil setelah sync dengan cloud
   const cm=currentMonth();
-  deduplicateBudgets(); // bersihkan duplikat sebelum hitung
   const monthExp=state.expenses.filter(e=>e.date.startsWith(cm));
   const totalSpent=monthExp.reduce((s,e)=>s+e.amount,0);
   const monthInc=state.incomes.filter(i=>i.date.startsWith(cm));
@@ -1715,18 +1666,24 @@ function onBudgetInputChange(){
 
 function saveAllBudgets(){
   const cats=Object.keys(CAT_LABELS);
-  const now=Date.now();
+  const now=Date.now(); // timestamp untuk resolusi konflik antar device
   cats.forEach(cat=>{
     const inp=document.getElementById('bud-input-'+cat);
     if(!inp) return;
     const amount=parseInt(inp.value)||0;
-    // Hapus SEMUA entri duplikat untuk category+month ini
-    state.budgets=state.budgets.filter(b=>!(b.category===cat&&b.month===budgetMonth));
-    state.budgets.push({id:genId(),category:cat,month:budgetMonth,allocated:amount,updatedAt:now});
+    const idx=state.budgets.findIndex(b=>b.category===cat&&b.month===budgetMonth);
+    if(idx>=0){
+      state.budgets[idx].allocated=amount;
+      state.budgets[idx].updatedAt=now;
+    } else {
+      state.budgets.push({id:genId(),category:cat,month:budgetMonth,allocated:amount,updatedAt:now});
+    }
   });
   persist();
+  // Sembunyikan tombol save
   const btn=document.getElementById('save-all-budget-btn');
   if(btn) btn.style.display='none';
+  // Tampilkan pesan sukses
   const msg=document.getElementById('budget-save-msg');
   if(msg){
     msg.style.display='block';
@@ -1735,8 +1692,10 @@ function saveAllBudgets(){
     msg.textContent='✓ Budget berhasil disimpan & tersinkron ke Dashboard!';
     setTimeout(()=>{ if(msg)msg.style.display='none'; },3000);
   }
+  // Refresh tampilan budget (update progress bar & sisa)
   refreshBudget();
-  // Update stat card dashboard langsung (tanpa navigate)
+  // Jika budget bulan ini yang diubah, update stat card "Total Budget" di Dashboard jika ada di DOM
+  // Update dashboard stat card Total Budget langsung (tanpa navigate)
   if(budgetMonth===currentMonth()){
     const totalBudgetNow=state.budgets.filter(b=>b.month===budgetMonth).reduce((s,b)=>s+b.allocated,0);
     document.querySelectorAll('.stat-card').forEach(card=>{
@@ -1760,13 +1719,15 @@ function openBudgetModal(cat){
 
 function saveBudget(){
   const amount=parseInt(document.getElementById('budget-amount').value)||0;
-  // Hapus SEMUA entri untuk category+month ini (termasuk duplikat lama)
-  state.budgets=state.budgets.filter(b=>!(b.category===budgetEditCategory&&b.month===budgetEditMonth));
-  state.budgets.push({id:genId(),category:budgetEditCategory,month:budgetEditMonth,allocated:amount,updatedAt:Date.now()});
+  const idx=state.budgets.findIndex(b=>b.category===budgetEditCategory&&b.month===budgetEditMonth);
+  if(idx>=0) state.budgets[idx].allocated=amount;
+  else state.budgets.push({id:genId(),category:budgetEditCategory,month:budgetEditMonth,allocated:amount});
   persist();
   document.getElementById('budget-modal').style.display='none';
+  // Refresh budget page & sinkronkan ke dashboard
   if(activeMenu==='budget') refreshBudget();
-  if(activeMenu==='dashboard') renderBLDashboard();
+  // Selalu update data dashboard agar tersinkron meski tidak sedang tampil
+  // (akan otomatis sinkron saat navigate ke dashboard)
 }
 
 // ══════════════════════════════════════════════
@@ -1938,7 +1899,7 @@ async function syncToSheets(){
   state.sheetsUrl=url;
   showSheetsMsg(true,'Mengirim semua data ke Sheets...');
   try{
-    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'push_all',users:state.users,expenses:state.expenses,incomes:state.incomes,budgets:state.budgets})});
+    await fetch(url,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'push_all',users:state.users,expenses:state.expenses,incomes:state.incomes,budgets:state.budgets,deletedIds:state.deletedIds||[]})});
     const now=new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
     showSheetsMsg(true,`✓ Semua data terkirim pukul ${now}`);
     syncStatus('ok',`Tersimpan ${now}`);
@@ -1972,6 +1933,10 @@ function formatSheetDate(val){
 
 
 function confirmResetData(){
+  if(!state.dataLoaded){
+    alert('Data cloud belum termuat. Reload halaman dulu sebelum melakukan reset.');
+    return;
+  }
   document.getElementById('confirm-icon').textContent='🗑️';
   document.getElementById('confirm-title').textContent='Reset Semua Data Transaksi?';
   document.getElementById('confirm-body').textContent='Seluruh data Pengeluaran dan Pemasukan Harian akan dihapus permanen dari aplikasi ini dan dari Google Sheets. Data Budget, User, dan pengaturan tidak akan terhapus. Lanjutkan?';
@@ -1983,7 +1948,8 @@ function confirmResetData(){
     state.deletedIds=[];
     closeConfirm();
 
-    // Push langsung ke Sheets (TANPA pull) — ini yang benar-benar menghapus
+    // Kirim ke server dengan action khusus 'reset_data' supaya server
+    // tidak melakukan merge (yang akan membawa balik expenses dari cloud).
     if(state.sheetsUrl){
       syncStatus('saving','Mereset data...');
       try{
@@ -1992,12 +1958,9 @@ function confirmResetData(){
           mode:'no-cors',
           headers:{'Content-Type':'text/plain;charset=utf-8'},
           body:JSON.stringify({
-            action:'push_all',
+            action:'reset_data',
             users:state.users,
-            expenses:[],
-            incomes:[],
             budgets:state.budgets,
-            deletedIds:[],
           })
         });
         const now=new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
@@ -2707,9 +2670,8 @@ window.addEventListener('load', async ()=>{
   const savedUID    = localStorage.getItem('ik_session_uid');
   state.sheetsUrl   = savedSheets;
 
-  // Selalu pull dari Sheets saat startup (untuk login + session restore).
-  // Pakai retry (pullCloudDataWithRetry) karena Apps Script sering "cold start"
-  // dan bisa lambat >8 detik pada percobaan pertama.
+  // Selalu pull dari Sheets saat startup (untuk login + session restore)
+  // Pakai retry karena Apps Script sering cold start dan lambat di percobaan pertama.
   if(state.sheetsUrl){
     const cloudData = await pullCloudDataWithRetry(state.sheetsUrl);
     if(cloudData){
@@ -2720,17 +2682,17 @@ window.addEventListener('load', async ()=>{
       state.deletedIds = cloudData.deletedIds||[];
       state.dataLoaded = true; // aman untuk push
     } else {
-      // PENTING: Tidak bisa konek ke Sheets setelah beberapa kali percobaan.
-      // JANGAN diam-diam pakai INITIAL_USERS lalu lanjut seperti biasa —
-      // itu yang menyebabkan user baru "hilang" dan bisa menimpa data asli
-      // di cloud kalau user melakukan aksi apa pun (dataLoaded tetap false
-      // supaya persist()/autoSyncToSheets menolak melakukan push).
+      // PENTING: Gagal konek ke Sheets setelah 3x percobaan.
+      // dataLoaded tetap false → persist() akan MENOLAK push,
+      // jadi data di cloud tidak mungkin tertimpa data kosong.
       state.users = INITIAL_USERS;
       state.dataLoaded = false;
       document.getElementById('login-screen').style.display='flex';
-      document.getElementById('login-error').style.display='block';
-      document.getElementById('login-error').innerHTML =
-        '⚠️ Gagal terhubung ke database (Google Sheets). Login sementara hanya bisa pakai akun default, dan perubahan TIDAK akan tersimpan. Silakan cek koneksi internet lalu <a href="#" onclick="location.reload();return false;" style="text-decoration:underline">reload halaman ini</a>.';
+      const errEl=document.getElementById('login-error');
+      if(errEl){
+        errEl.style.display='block';
+        errEl.innerHTML='⚠️ Gagal terhubung ke database. Perubahan TIDAK akan tersimpan. Cek koneksi lalu <a href="#" onclick="location.reload();return false;" style="text-decoration:underline">reload halaman</a>.';
+      }
       setupModalListeners();
       return;
     }
